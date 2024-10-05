@@ -12,8 +12,15 @@
  */
 package net.minecraft.server;
 
-import java.util.List;
-import java.util.Map;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.security.DigestException;
+import java.security.NoSuchAlgorithmException;
+import java.util.*;
 import java.util.logging.Logger;
 
 import cpw.mods.fml.common.FMLCommonHandler;
@@ -776,5 +783,124 @@ public class ModLoader
     public static boolean isChannelActive(EntityHuman player, String channel)
     {
         return FMLCommonHandler.instance().isChannelActive(channel, player);
+    }
+
+    /**
+     * Added for compatability for some mods
+     */
+    public static void setupProperties(Class mod) throws IllegalArgumentException, IllegalAccessException, IOException, SecurityException, NoSuchFieldException, NoSuchAlgorithmException, DigestException {
+        List<Field> fieldList = new LinkedList<>();
+        Properties modprops = new Properties();
+        int currentHash = 0;
+        int cfgHash = 0;
+        Logger logger = getLogger();
+        File cfgdir = Loader.instance().getConfigDir();
+        File modcfgfile = new File(cfgdir, mod.getSimpleName() + ".cfg");
+        if (modcfgfile.exists() && modcfgfile.canRead()) {
+            modprops.load(Files.newInputStream(modcfgfile.toPath()));
+        }
+
+        if (modprops.containsKey("checksum")) {
+            cfgHash = Integer.parseInt(modprops.getProperty("checksum"), 36);
+        }
+
+        Field[] var9;
+        int var8 = (var9 = mod.getDeclaredFields()).length;
+
+        for(int var7 = 0; var7 < var8; ++var7) {
+            Field field = var9[var7];
+            if ((field.getModifiers() & 8) != 0 && field.isAnnotationPresent(MLProp.class)) {
+                fieldList.add(field);
+                Object currentvalue = field.get(null);
+                currentHash += currentvalue.hashCode();
+            }
+        }
+
+        StringBuilder helptext = new StringBuilder();
+        Iterator<Field> var21 = fieldList.iterator();
+
+        while(true) {
+            String key;
+            Object currentvalue;
+            Object value;
+            double num;
+            Field field;
+            MLProp annotation;
+            do {
+                do {
+                    while(true) {
+                        do {
+                            do {
+                                if (!var21.hasNext()) {
+                                    modprops.put("checksum", Integer.toString(currentHash, 36));
+                                    if (!modprops.isEmpty() && (modcfgfile.exists() || modcfgfile.createNewFile()) && modcfgfile.canWrite()) {
+                                        modprops.store(new FileOutputStream(modcfgfile), helptext.toString());
+                                    }
+
+                                    return;
+                                }
+
+                                field = (Field)var21.next();
+                            } while((field.getModifiers() & 8) == 0);
+                        } while(!field.isAnnotationPresent(MLProp.class));
+
+                        Class<?> type = field.getType();
+                        annotation = field.getAnnotation(MLProp.class);
+                        key = annotation.name().isEmpty() ? field.getName() : annotation.name();
+                        currentvalue = field.get(null);
+                        StringBuilder range = new StringBuilder();
+                        if (annotation.min() != Double.NEGATIVE_INFINITY) {
+                            range.append(String.format(",>=%.1f", annotation.min()));
+                        }
+
+                        if (annotation.max() != Double.POSITIVE_INFINITY) {
+                            range.append(String.format(",<=%.1f", annotation.max()));
+                        }
+
+                        StringBuilder info = new StringBuilder();
+                        if (!annotation.info().isEmpty()) {
+                            info.append(" -- ");
+                            info.append(annotation.info());
+                        }
+
+                        helptext.append(String.format("%s (%s:%s%s)%s\n", key, type.getName(), currentvalue, range, info));
+                        if (cfgHash == currentHash && modprops.containsKey(key)) {
+                            String strvalue = modprops.getProperty(key);
+                            value = null;
+                            if (type.isAssignableFrom(String.class)) {
+                                value = strvalue;
+                            } else if (type.isAssignableFrom(Integer.TYPE)) {
+                                value = Integer.parseInt(strvalue);
+                            } else if (type.isAssignableFrom(Short.TYPE)) {
+                                value = Short.parseShort(strvalue);
+                            } else if (type.isAssignableFrom(Byte.TYPE)) {
+                                value = Byte.parseByte(strvalue);
+                            } else if (type.isAssignableFrom(Boolean.TYPE)) {
+                                value = Boolean.parseBoolean(strvalue);
+                            } else if (type.isAssignableFrom(Float.TYPE)) {
+                                value = Float.parseFloat(strvalue);
+                            } else if (type.isAssignableFrom(Double.TYPE)) {
+                                value = Double.parseDouble(strvalue);
+                            }
+                            break;
+                        }
+
+                        logger.finer(key + " not in config, using default: " + currentvalue);
+                        modprops.setProperty(key, currentvalue.toString());
+                    }
+                } while(value == null);
+
+                if (!(value instanceof Number)) {
+                    break;
+                }
+
+                num = ((Number)value).doubleValue();
+            } while(annotation.min() != Double.NEGATIVE_INFINITY && num < annotation.min() || annotation.max() != Double.POSITIVE_INFINITY && num > annotation.max());
+
+            logger.finer(key + " set to " + value);
+            if (!value.equals(currentvalue)) {
+                field.set(null, value);
+            }
+        }
     }
 }
